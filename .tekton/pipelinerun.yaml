@@ -1,0 +1,103 @@
+---
+apiVersion: tekton.dev/v1beta1
+kind: PipelineRun
+metadata:
+  name: tekton-hello-run
+  annotations:
+    pipelinesascode.tekton.dev/on-event: "[pull_request, push]"
+    pipelinesascode.tekton.dev/on-target-branch: "[main]"
+    pipelinesascode.tekton.dev/task: 'git-clone'
+    pipelinesascode.tekton.dev/task-1: 's2i-java'
+    pipelinesascode.tekton.dev/task-2: 'openshift-client'
+    pipelinesascode.tekton.dev/max-keep-runs: "2"
+spec:
+  params:
+    - name: APP_NAME
+      value: tekton-hello
+    - name: GIT_REPO
+      value: "{{ repo_url }}"
+    - name: GIT_REVISION
+      value: "{{ revision }}"
+    - name: IMAGE_NAME
+      value: 'image-registry.openshift-image-registry.svc:5000/tekton-demo-one/tekton-hello'
+    - name: PATH_CONTEXT
+      value: .
+    - name: VERSION
+      value: openjdk-17-ubi8      
+  pipelineSpec:
+    taskRunTemplate:
+      serviceAccountName: pipeline
+    params:
+      - name: GIT_REPO
+      - name: GIT_REVISION
+      - name: IMAGE_NAME
+      - name: APP_NAME
+      - name: PATH_CONTEXT
+      - name: VERSION
+    workspaces:
+      - name: workspace
+    tasks:
+      - name: fetch-repository
+        params:
+          - name: URL
+            value: $(params.GIT_REPO)
+          - name: REVISION
+            value: $(params.GIT_REVISION)
+          - name: SUBDIRECTORY
+            value: ''
+          - name: DELETE_EXISTING
+            value: 'true'
+        taskRef:
+          params:
+            - name: kind
+              value: task
+            - name: name
+              value: git-clone
+            - name: namespace
+              value: openshift-pipelines
+          resolver: cluster
+        workspaces:
+          - name: output
+            workspace: workspace    
+      - name: build
+        params:
+          - name: IMAGE
+            value: $(params.IMAGE_NAME)
+          - name: TLS_VERIFY
+            value: 'false'
+          - name: CONTEXT
+            value: .
+          - name: VERSION
+            value: $(params.VERSION)
+        runAfter:
+          - fetch-repository
+        taskRef:
+          params:
+            - name: kind
+              value: task
+            - name: name
+              value: s2i-java
+            - name: namespace
+              value: openshift-pipelines
+          resolver: cluster
+        workspaces:
+          - name: source
+            workspace: workspace
+
+      - name: deploy
+        params:
+          - name: SCRIPT
+            value: oc rollout status deploy/tekton-hello
+        runAfter:
+          - build
+        taskRef:
+          params:
+            - name: kind
+              value: task
+            - name: name
+              value: openshift-client
+            - name: namespace
+              value: openshift-pipelines
+          resolver: cluster
+  workspaces:
+    - name: workspace
